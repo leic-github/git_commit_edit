@@ -29,6 +29,7 @@
 - 打exe包
 
   ```shell
+  pip install pyinstaller 
   python.exe -m PyInstaller -F main.py  --noconsole
   ```
 
