@@ -4,7 +4,6 @@ import os
 import random
 import subprocess
 import sys
-import tempfile
 from datetime import timedelta, datetime
 
 from PyQt5.QtCore import QDateTime
@@ -13,6 +12,8 @@ from PyQt5.QtWidgets import (
     QVBoxLayout, QFileDialog, QListWidget, QMessageBox, QComboBox, QDialog,
     QFormLayout, QDateTimeEdit, QDialogButtonBox, QListWidgetItem, QTextEdit
 )
+
+from callback_builder import CallbackScriptBuilder
 
 CONFIG_PATH = "config.json"
 
@@ -341,32 +342,45 @@ class GitCommitEditor(QWidget):
             new_commits = [commit[:7] for commit in commits]
             if base_commit != "" and base_commit in new_commits:
                 index = new_commits.index(base_commit)
-                index = index+1 if index<(len(commits)-1) else -1
+                index = index + 1 if index < (len(commits) - 1) else -1
                 commits = commits[:index]
 
             total = len(commits)
             seconds_range = int((end - start).total_seconds())
             time_steps = sorted([random.randint(0, seconds_range) for _ in range(total)], reverse=True)
-
+            commit_changes = {}
             # 忽略第一次提交，因为无法修改
             for i, commit in enumerate(commits):
                 rand_time = start + timedelta(seconds=time_steps[i])
                 formatted_date = rand_time.strftime("%Y-%m-%dT%H:%M:%S")
+
                 rand_author = random.choice(authors)
                 name = rand_author.split("<")[0].strip()
                 email = rand_author.split("<")[1].strip(" >")
                 _, _, message = self.get_commit_info(commit)
-                script_path = os.path.join(tempfile.gettempdir(), f"editor_{commit}.py")
-                generate_rebase_editor_script(script_path)
-                env = build_env(name, email, formatted_date, script_path)
 
-                rebase_interactive(repo, commit, env, self.root_commit_log in commit)
-                amend_commit(repo, env, message)
-                rebase_continue(repo, env)
-                delete_temp_file(script_path)
+                commit_changes[commit[:7]] = {
+                    "name": name,
+                    "email": email,
+                    "date": formatted_date,
+                    "message": message,
+                }
+            callback_path = os.path.join(self.repo_path.text(), "rewrite_callback.py")
+            CallbackScriptBuilder.build_bulk_commit_callback(callback_path, commit_changes)
+            try:
+                result = subprocess.run([
+                    "git-filter-repo",
+                    "--commit-callback", callback_path
+                    , "--force"
+                ], cwd=self.repo_path.text(), capture_output=True, text=True)
 
-            self.load_commits()
-            QMessageBox.information(self, "完成", "批量重写完成")
+                if result.returncode == 0:
+                    self.load_commits()
+                    QMessageBox.information(self, "成功", "提交修改完成（使用 filter-repo）")
+                else:
+                    QMessageBox.critical(self, "失败", result.stderr)
+            finally:
+                os.remove(callback_path)
 
     def push_force(self):
         repo = self.repo_path.text()
@@ -396,42 +410,36 @@ class GitCommitEditor(QWidget):
                 return
 
             repo_path = self.repo_path.text()
+            file_name = "edit_commit_callback.py"
+            script_path = os.path.join(repo_path, file_name)
             try:
                 author_name = new_author.split("<")[0].strip()
                 author_email = new_author.split("<")[1].strip(" >")
+                ok = CallbackScriptBuilder.build_single_commit_callback(
+                    filepath=script_path,
+                    target_hash=selected_commit,
+                    author_name=author_name,
+                    author_email=author_email,
+                    commit_message=new_msg,
+                    date_str=new_date  # 格式：2024-01-01T10:00:00
+                )
 
-                full_log = self.run_git_command(
-                    ["git", "rev-list", self.branch_selector.currentText()],
-                    cwd=repo_path
-                ).splitlines()
-                full_log = [v[:7] for v in full_log]
-                if selected_commit not in full_log:
-                    QMessageBox.critical(self, "错误", "未能在分支中找到该提交")
+                if not ok:
+                    QMessageBox.critical(self, "失败", "生成 callback 脚本失败")
                     return
+                result = subprocess.run([
+                    "git-filter-repo",
+                    "--commit-callback", script_path
+                    , "--force"
+                ], cwd=repo_path, capture_output=True, text=True)
 
-                index = full_log.index(selected_commit)
-                # if index == len(full_log) - 1:
-                #     QMessageBox.warning(self, "提示", "无法 rebase 第一个提交")
-                #     return
-
-                rebase_start = full_log[index]
-
-                editor_script = os.path.join(tempfile.gettempdir(), "rebase_editor.py")
-                generate_rebase_editor_script(editor_script)
-                env = build_env(author_name, author_email, new_date, editor_script)
-
-                # 根提交记录的修改
-                rebase_interactive(repo_path, rebase_start, env, self.root_commit_log in rebase_start)
-
-                amend_commit(repo_path, env, new_msg)
-
-                rebase_continue(repo_path, env)
-
-                os.remove(editor_script)
-                self.load_commits()
-                QMessageBox.information(self, "成功", "提交修改成功！")
-
+                if result.returncode == 0:
+                    self.load_commits()
+                    QMessageBox.information(self, "成功", "提交修改完成（使用 filter-repo）")
+                else:
+                    QMessageBox.critical(self, "失败", result.stderr)
             except Exception as e:
+                os.remove(script_path)
                 QMessageBox.critical(self, "错误", str(e))
 
     def get_commit_info(self, selected_commit):

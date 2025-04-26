@@ -10,13 +10,19 @@
   
   
 
-### 安装的前置条件：
+### 前置条件：
 
 - 本地需要安装python 并配置了环境变量
 
   > 不低于python3.8
 
 - 本地安装了Git
+
+- 安装git-filter-repo
+
+  > [git-filter-repo](https://github.com/newren/git-filter-repo)
+
+  
 
 ### 打包
 
@@ -40,10 +46,10 @@
   ```json
   {
     "authors": [
-      "chenlei04(陈磊) <chenlei04@genscigroup.com>",
-      "wangwenjie(王文杰) <wangwenjie@genscigroup.com>",
-      "wushiguang(吴世光) <wushiguang@genscigroup.com>",
-      "zhangwei(张伟) <zhangwei@genscigroup.com>"
+      "zhangsan <zhangsan@XXx.com>",
+      "lisi <lisi@XXx.com>",
+      "wangwu <wangwu@XXx.com>",
+      "zhaoliu <zhaoliu@XXx.com>"
     ]
   }
   ```
