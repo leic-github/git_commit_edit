@@ -18,9 +18,7 @@
 
 - 本地安装了Git
 
-- 安装git-filter-repo
-
-  > [git-filter-repo](https://github.com/newren/git-filter-repo)
+- 将`git-filter-repo.exe` 复制到系统配置 并配置环境
 
   
 

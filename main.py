@@ -284,24 +284,27 @@ class GitCommitEditor(QWidget):
         repo = self.repo_path.text()
         if not os.path.isdir(repo):
             return
-        output = run_git_command(["git", "branch"], cwd=repo)
-        branches = [line for line in output.split("\n") if line.strip() != '']
+        def get_all_branched():
+            # 获取所有的远程分支
+            output = run_git_command(["git", "branch","-r"], cwd=repo)
+            branches = [line for line in output.split("\n") if line.strip() != '']
+            branches =branches[1:]
+            branches = [branch.split("/")[-1] for branch in branches]
+            return branches
+        def get_selected_branch():
+            # 获取当前选择的分支
+            output = run_git_command(["git", "branch"], cwd=repo)
+            branches = [line for line in output.split("\n") if line.strip() != '']
+            branches = [branch.split("*")[-1].strip() for branch in branches if branch.startswith("*")]
+            return branches[0]
+
+        branches =  get_all_branched()
         if not len(branches):
             QMessageBox.critical(self, "失败", "无法获取分支列表")
             return
-        items = []
-        current = ""
-        for branch in branches:
-            if branch.startswith("*"):
-                branch = branch[1:].strip()
-                current = branch
-            else:
-                branch = branch.strip()
-            items.append(branch)
+        current = get_selected_branch()
         self.branch_selector.clear()
-        if not len(items):
-            return
-        self.branch_selector.addItems(items)
+        self.branch_selector.addItems(branches)
         # 设置当前分支
         if current != "":
             self.branch_selector.setCurrentText(current)
@@ -372,7 +375,8 @@ class GitCommitEditor(QWidget):
                     "git-filter-repo",
                     "--commit-callback", callback_path
                     , "--force"
-                ], cwd=self.repo_path.text(), capture_output=True, text=True)
+                ], encoding='utf-8',
+                    errors='replace', cwd=self.repo_path.text(), capture_output=True, text=True)
 
                 if result.returncode == 0:
                     self.load_commits()
@@ -429,16 +433,19 @@ class GitCommitEditor(QWidget):
                     return
                 result = subprocess.run([
                     "git-filter-repo",
-                    "--commit-callback", script_path
+                    "--commit-callback", file_name
                     , "--force"
-                ], cwd=repo_path, capture_output=True, text=True)
+                ], cwd=repo_path, encoding='utf-8',
+                    errors='replace', capture_output=True, text=True)
 
                 if result.returncode == 0:
                     self.load_commits()
                     QMessageBox.information(self, "成功", "提交修改完成（使用 filter-repo）")
                 else:
+                    logging.error(f"edit commit failed: {selected_commit}", result.stderr)
                     QMessageBox.critical(self, "失败", result.stderr)
             except Exception as e:
+                logging.error(f"edit commit failed: {selected_commit}", exc_info=e)
                 os.remove(script_path)
                 QMessageBox.critical(self, "错误", str(e))
 
@@ -488,8 +495,17 @@ class GitCommitEditor(QWidget):
             )
             return result.stdout.strip()
         except Exception as e:
+            logging.error(f"Error running git command: {cmd_list}", exc_info=e)
             QMessageBox.critical(self, "命令执行出错", str(e))
             return ""
+
+
+logging.basicConfig(
+    filename='app.log',  # 日志文件名
+    filemode='a',  # 文件模式 ('w' 表示覆盖写入, 'a' 表示追加写入)
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',  # 日志格式
+    level=logging.DEBUG  # 日志级别
+)
 
 
 def log_exception(exc_type, exc_value, exc_traceback):
