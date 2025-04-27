@@ -226,6 +226,7 @@ class GitCommitEditor(QWidget):
 
     def __init__(self):
         super().__init__()
+        self.remote_url = None
         self.setWindowTitle("Git Commit Editor (全功能整合版)")
 
         self.repo_path = QLineEdit()
@@ -279,36 +280,51 @@ class GitCommitEditor(QWidget):
             self.repo_path.setText(path)
             save_last_repo_path(path)
             self.load_branches()
+    def get_remote_url(self):
+        # 获取远程仓库地址
+        output = run_git_command(["git", "remote", "get-url", "origin"], cwd=self.repo_path.text())
+        self.remote_url = output.strip()
+    def reset_remote_url(self):
+        # 重置远程仓库地址
+        if self.remote_url is None:
+           return
+        run_git_command(["git", "remote", "add", "origin", self.remote_url], cwd=self.repo_path.text())
 
     def load_branches(self):
         repo = self.repo_path.text()
         if not os.path.isdir(repo):
             return
-        def get_all_branched():
-            # 获取所有的远程分支
-            output = run_git_command(["git", "branch","-r"], cwd=repo)
-            branches = [line for line in output.split("\n") if line.strip() != '']
-            branches =branches[1:]
-            branches = [branch.split("/")[-1] for branch in branches]
-            return branches
-        def get_selected_branch():
-            # 获取当前选择的分支
-            output = run_git_command(["git", "branch"], cwd=repo)
-            branches = [line for line in output.split("\n") if line.strip() != '']
-            branches = [branch.split("*")[-1].strip() for branch in branches if branch.startswith("*")]
-            return branches[0]
 
-        branches =  get_all_branched()
+        def get_branches():
+            # 获取所有的远程分支
+            output = run_git_command(["git", "branch", "-a"], cwd=repo)
+            all = [line.strip() for line in output.split("\n") if line.strip() != '']
+            current = ""
+            branches = set()
+            for branch in all:
+                if "HEAD" in branch:
+                    continue
+                if branch.startswith("remotes/origin/"):
+                    branches.add(branch.split("/")[-1])
+                    continue
+                if branch.startswith("*"):
+                    current = branch.split("*")[-1].strip()
+                    branches.add(current)
+                else:
+                    branches.add(branch)
+            # 远程分支列表
+            return branches, current
+
+        branches, current = get_branches()
         if not len(branches):
-            QMessageBox.critical(self, "失败", "无法获取分支列表")
             return
-        current = get_selected_branch()
         self.branch_selector.clear()
         self.branch_selector.addItems(branches)
         # 设置当前分支
         if current != "":
             self.branch_selector.setCurrentText(current)
             self.load_commits()
+        self.get_remote_url()
 
     def load_commits(self):
         repo = self.repo_path.text()
@@ -379,21 +395,24 @@ class GitCommitEditor(QWidget):
                     errors='replace', cwd=self.repo_path.text(), capture_output=True, text=True)
 
                 if result.returncode == 0:
+                    self.reset_remote_url()
                     self.load_commits()
                     QMessageBox.information(self, "成功", "提交修改完成（使用 filter-repo）")
                 else:
                     QMessageBox.critical(self, "失败", result.stderr)
+            except Exception as e:
+                logging.error("批量修改失败:", exc_info=e)
+                QMessageBox.critical(self, "失败", str(e))
             finally:
                 os.remove(callback_path)
 
     def push_force(self):
+        # 增减确认框 确认是否需要强推  这是一个危险操作
+        if QMessageBox.question(self, "确认", "这个操作会导致原来的提交记录丢失，确定要强推吗？", QMessageBox.Yes | QMessageBox.No) == QMessageBox.No:
+            return
         repo = self.repo_path.text()
         branch = self.branch_selector.currentText()
-        remotes = run_git_command(["git", "branch", "-r"], cwd=repo).splitlines()
-        if not any(f"origin/{branch}" in r for r in remotes):
-            QMessageBox.warning(self, "警告", f"远程未检测到分支 {branch}")
-            return
-        result = subprocess.run(["git", "push", "origin", branch, "--force"], cwd=repo, capture_output=True, text=True)
+        result = subprocess.run(["git", "push",'--set-upstream', "origin", branch, "--force"], cwd=repo, capture_output=True, text=True)
         if result.returncode == 0:
             QMessageBox.information(self, "成功", "强推完成")
         else:
@@ -439,6 +458,7 @@ class GitCommitEditor(QWidget):
                     errors='replace', capture_output=True, text=True)
 
                 if result.returncode == 0:
+                    self.reset_remote_url()
                     self.load_commits()
                     QMessageBox.information(self, "成功", "提交修改完成（使用 filter-repo）")
                 else:
@@ -446,8 +466,9 @@ class GitCommitEditor(QWidget):
                     QMessageBox.critical(self, "失败", result.stderr)
             except Exception as e:
                 logging.error(f"edit commit failed: {selected_commit}", exc_info=e)
-                os.remove(script_path)
                 QMessageBox.critical(self, "错误", str(e))
+            finally:
+                os.remove(script_path)
 
     def get_commit_info(self, selected_commit):
         try:
