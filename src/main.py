@@ -317,7 +317,7 @@ class GitCommitEditor(QWidget):
                 if "HEAD" in branch:
                     continue
                 if branch.startswith("remotes/origin/"):
-                    branches.add(branch.split("/")[-1])
+                    branches.add(branch.replace("remotes/origin/",""))
                     continue
                 if branch.startswith("*"):
                     current = branch.split("*")[-1].strip()
