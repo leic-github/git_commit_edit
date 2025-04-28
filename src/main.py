@@ -1,7 +1,9 @@
+import datetime
 import json
 import logging
 import os
 import random
+import shutil
 import subprocess
 import sys
 from datetime import timedelta, datetime
@@ -10,7 +12,7 @@ from PyQt5.QtCore import QDateTime
 from PyQt5.QtWidgets import (
     QApplication, QWidget, QLabel, QLineEdit, QPushButton,
     QVBoxLayout, QFileDialog, QListWidget, QMessageBox, QComboBox, QDialog,
-    QFormLayout, QDateTimeEdit, QDialogButtonBox, QListWidgetItem, QTextEdit
+    QFormLayout, QDateTimeEdit, QDialogButtonBox, QListWidgetItem, QTextEdit, QInputDialog
 )
 
 from authors import ManageAuthorsDialog
@@ -151,12 +153,12 @@ class BulkRewriteDialog(QDialog):
         self.start_time = QDateTimeEdit()
         self.start_time.setCalendarPopup(True)
         self.start_time.setDateTime(QDateTime.currentDateTime().addDays(-7))
-        self.start_time.setDisplayFormat("yyyy-MM-dd HH:mm:ss")
+        self.start_time.setDisplayFormat("yyyy-MM-dd")
 
         self.end_time = QDateTimeEdit()
         self.end_time.setCalendarPopup(True)
         self.end_time.setDateTime(QDateTime.currentDateTime())
-        self.end_time.setDisplayFormat("yyyy-MM-dd HH:mm:ss")
+        self.end_time.setDisplayFormat("yyyy-MM-dd")
 
         buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
         buttons.accepted.connect(self.accept)
@@ -227,6 +229,7 @@ class GitCommitEditor(QWidget):
     def __init__(self):
         super().__init__()
         self.remote_url = None
+        self.current_branch = None
         self.authors = load_authors()
         self.setWindowTitle("Git Commit Editor (全功能整合版)")
 
@@ -317,7 +320,7 @@ class GitCommitEditor(QWidget):
                 if "HEAD" in branch:
                     continue
                 if branch.startswith("remotes/origin/"):
-                    branches.add(branch.replace("remotes/origin/",""))
+                    branches.add(branch.replace("remotes/origin/", ""))
                     continue
                 if branch.startswith("*"):
                     current = branch.split("*")[-1].strip()
@@ -327,14 +330,14 @@ class GitCommitEditor(QWidget):
             # 远程分支列表
             return branches, current
 
-        branches, current = get_branches()
+        branches, self.current_branch = get_branches()
         if not len(branches):
             return
         self.branch_selector.clear()
         self.branch_selector.addItems(branches)
         # 设置当前分支
-        if current != "":
-            self.branch_selector.setCurrentText(current)
+        if self.current_branch != "":
+            self.branch_selector.setCurrentText(self.current_branch)
             self.load_commits()
         self.get_remote_url()
 
@@ -345,8 +348,10 @@ class GitCommitEditor(QWidget):
             return
         result = subprocess.run(["git", "checkout", branch], cwd=repo, capture_output=True, text=True)
         if result.returncode != 0:
+            self.branch_selector.setCurrentText(self.current_branch)
             QMessageBox.critical(self, "失败", result.stderr)
             return
+        self.current_branch = branch
         cmd = ["git", "log", branch, "--pretty=format:%h %an <%ae> %ad %s %d", "--date=iso"]
         output = run_git_command(cmd, cwd=repo)
         self.commit_listbox.clear()
@@ -359,6 +364,9 @@ class GitCommitEditor(QWidget):
         self.commit_listbox.addItems(commit_logs)
 
     def rewrite_commits_randomly(self):
+        if not shutil.which("git-filter-repo"):
+            QMessageBox.critical(self, "错误", "请先安装 git-filter-repo 工具")
+            return
         dialog = BulkRewriteDialog()
         if dialog.exec_():
             authors, start, end, base_commit = dialog.get_values()
@@ -382,13 +390,15 @@ class GitCommitEditor(QWidget):
             commit_changes = {}
             # 忽略第一次提交，因为无法修改
             for i, commit in enumerate(commits):
+                _, date, message = self.get_commit_info(commit)
+                commit_date = datetime.strptime(date, "%Y-%m-%d %H:%M:%S +0800")
                 rand_time = start + timedelta(seconds=time_steps[i])
-                formatted_date = rand_time.strftime("%Y-%m-%dT%H:%M:%S")
-
+                commit_date = datetime(year=rand_time.year, month=rand_time.month, day=rand_time.day,
+                                       hour=commit_date.hour, minute=commit_date.minute, second=commit_date.second)
+                formatted_date = commit_date.strftime("%Y-%m-%dT%H:%M:%S")
                 rand_author = random.choice(authors)
                 name = rand_author.split("<")[0].strip()
                 email = rand_author.split("<")[1].strip(" >")
-                _, _, message = self.get_commit_info(commit)
 
                 commit_changes[commit[:7]] = {
                     "name": name,
@@ -419,13 +429,17 @@ class GitCommitEditor(QWidget):
                 os.remove(callback_path)
 
     def push_force(self):
-        # 增减确认框 确认是否需要强推  这是一个危险操作
+        remote_url, ok = QInputDialog.getText(self, "输入远程仓库地址",
+                                              "请输入远程仓库地址（如 origin 或 https://xxx.git）", text="origin")
+        if not ok or remote_url.strip() == "":
+            QMessageBox.warning(self, "取消", "未输入远程仓库地址，操作已取消")
+            return
         if QMessageBox.question(self, "确认", "这个操作会导致原来的提交记录丢失，确定要强推吗？",
                                 QMessageBox.Yes | QMessageBox.No) == QMessageBox.No:
             return
         repo = self.repo_path.text()
         branch = self.branch_selector.currentText()
-        result = subprocess.run(["git", "push", '--set-upstream', "origin", branch, "--force"], cwd=repo,
+        result = subprocess.run(["git", "push", '--set-upstream', remote_url.strip(), branch, "--force"], cwd=repo,
                                 capture_output=True, text=True)
         if result.returncode == 0:
             QMessageBox.information(self, "成功", "强推完成")
@@ -433,6 +447,9 @@ class GitCommitEditor(QWidget):
             QMessageBox.critical(self, "失败", result.stderr)
 
     def edit_commit(self, item):
+        if not shutil.which("git-filter-repo"):
+            QMessageBox.critical(self, "错误", "请先安装 git-filter-repo 工具")
+            return
         selected_commit = item.text().split()[0]
 
         author, date, message = self.get_commit_info(selected_commit)
