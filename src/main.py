@@ -227,6 +227,7 @@ class GitCommitEditor(QWidget):
     def __init__(self):
         super().__init__()
         self.remote_url = None
+        self.current_branch=None
         self.authors = load_authors()
         self.setWindowTitle("Git Commit Editor (全功能整合版)")
 
@@ -327,14 +328,14 @@ class GitCommitEditor(QWidget):
             # 远程分支列表
             return branches, current
 
-        branches, current = get_branches()
+        branches, self.current_branch = get_branches()
         if not len(branches):
             return
         self.branch_selector.clear()
         self.branch_selector.addItems(branches)
         # 设置当前分支
-        if current != "":
-            self.branch_selector.setCurrentText(current)
+        if self.current_branch != "":
+            self.branch_selector.setCurrentText(self.current_branch)
             self.load_commits()
         self.get_remote_url()
 
@@ -345,8 +346,10 @@ class GitCommitEditor(QWidget):
             return
         result = subprocess.run(["git", "checkout", branch], cwd=repo, capture_output=True, text=True)
         if result.returncode != 0:
+            self.branch_selector.setCurrentText(self.current_branch)
             QMessageBox.critical(self, "失败", result.stderr)
             return
+        self.current_branch = branch
         cmd = ["git", "log", branch, "--pretty=format:%h %an <%ae> %ad %s %d", "--date=iso"]
         output = run_git_command(cmd, cwd=repo)
         self.commit_listbox.clear()
