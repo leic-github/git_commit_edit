@@ -3,7 +3,7 @@ import json
 import logging
 import os
 import random
-import shutil
+import site
 import subprocess
 import sys
 from datetime import timedelta, datetime
@@ -58,6 +58,11 @@ def load_authors():
     return []
 
 
+def get_script_dir():
+    python_home = sys.prefix
+    return os.path.join(python_home, 'Scripts')
+
+
 # ---------------------- Git 工具函数 ----------------------
 def run_git_command(cmd_list, cwd=None, env=None):
     try:
@@ -77,33 +82,6 @@ def run_git_command(cmd_list, cwd=None, env=None):
         return result.stdout.strip()
     except Exception as e:
         return str(e)
-
-
-def generate_rebase_editor_script(path):
-    with open(path, "w", encoding="utf-8") as f:
-        f.write(
-            """import sys\nwith open(sys.argv[1], 'r+', encoding='utf-8') as f:\n    lines = f.readlines()\n    for i, line in enumerate(lines):\n        if line.startswith('pick '):\n            lines[i] = line.replace('pick', 'edit', 1)\n            break\n    f.seek(0)\n    f.writelines(lines)\n    f.truncate()\n""")
-
-
-def generate_random_author_date(author_list, start_dt, end_dt):
-    rand_author = random.choice(author_list)
-    rand_time = start_dt + timedelta(seconds=random.randint(0, int((end_dt - start_dt).total_seconds())))
-    formatted_date = rand_time.strftime("%Y-%m-%dT%H:%M:%S")
-
-    author_name = rand_author.split("<")[0].strip()
-    author_email = rand_author.split("<")[1].strip(" >")
-    return author_name, author_email, formatted_date
-
-
-def build_env(author_name, author_email, date, editor_script):
-    env = os.environ.copy()
-    env["GIT_AUTHOR_NAME"] = author_name
-    env["GIT_AUTHOR_EMAIL"] = author_email
-    env["GIT_COMMITTER_DATE"] = date
-    env["GIT_AUTHOR_DATE"] = date
-    python_path = "python" if hasattr(sys, "_MEIPASS") else sys.executable
-    env["GIT_SEQUENCE_EDITOR"] = f'"{python_path}" "{editor_script}"'
-    return env
 
 
 def amend_commit(repo_path, env, message):
@@ -225,6 +203,13 @@ from PyQt5.QtCore import Qt
 from PyQt5.QtWidgets import QMenu
 
 
+def git_filter_repo_execute_file():
+    for script_path in scripts_dirs:
+        if os.path.exists(os.path.join(script_path, "git-filter-repo.exe")):
+            return True
+    return False
+
+
 class GitCommitEditor(QWidget):
     def __init__(self):
         super().__init__()
@@ -273,6 +258,10 @@ class GitCommitEditor(QWidget):
 
         self.setLayout(layout)
         self.root_commit_log = ''
+
+        # 设置显示框的初始大小
+        self.setMinimumHeight(800)
+        self.setMinimumWidth(500)
 
         if self.repo_path.text() != "":
             self.load_branches()
@@ -364,7 +353,7 @@ class GitCommitEditor(QWidget):
         self.commit_listbox.addItems(commit_logs)
 
     def rewrite_commits_randomly(self):
-        if not shutil.which("git-filter-repo"):
+        if not git_filter_repo_execute_file():
             QMessageBox.critical(self, "错误", "请先安装 git-filter-repo 工具")
             return
         dialog = BulkRewriteDialog()
@@ -414,7 +403,7 @@ class GitCommitEditor(QWidget):
                     "--commit-callback", callback_path
                     , "--force"
                 ], encoding='utf-8',
-                    errors='replace', cwd=self.repo_path.text(), capture_output=True, text=True)
+                    errors='replace',cwd=self.repo_path.text(), capture_output=True, text=True)
 
                 if result.returncode == 0:
                     self.reset_remote_url()
@@ -447,7 +436,7 @@ class GitCommitEditor(QWidget):
             QMessageBox.critical(self, "失败", result.stderr)
 
     def edit_commit(self, item):
-        if not shutil.which("git-filter-repo"):
+        if not git_filter_repo_execute_file():
             QMessageBox.critical(self, "错误", "请先安装 git-filter-repo 工具")
             return
         selected_commit = item.text().split()[0]
@@ -465,12 +454,12 @@ class GitCommitEditor(QWidget):
 
             repo_path = self.repo_path.text()
             file_name = "edit_commit_callback.py"
-            script_path = os.path.join(repo_path, file_name)
+            target_file_path = os.path.join(repo_path, file_name)
             try:
                 author_name = new_author.split("<")[0].strip()
                 author_email = new_author.split("<")[1].strip(" >")
                 ok = CallbackScriptBuilder.build_single_commit_callback(
-                    filepath=script_path,
+                    filepath=target_file_path,
                     target_hash=selected_commit,
                     author_name=author_name,
                     author_email=author_email,
@@ -481,6 +470,7 @@ class GitCommitEditor(QWidget):
                 if not ok:
                     QMessageBox.critical(self, "失败", "生成 callback 脚本失败")
                     return
+                # 将新的路径添加到 PATH 环境变量中
                 result = subprocess.run([
                     "git-filter-repo",
                     "--commit-callback", file_name
@@ -499,7 +489,7 @@ class GitCommitEditor(QWidget):
                 logging.error(f"edit commit failed: {selected_commit}", exc_info=e)
                 QMessageBox.critical(self, "错误", str(e))
             finally:
-                os.remove(script_path)
+                os.remove(target_file_path)
 
     def get_commit_info(self, selected_commit):
         try:
@@ -570,6 +560,28 @@ def log_exception(exc_type, exc_value, exc_traceback):
 
 
 sys.excepthook = log_exception
+
+
+def get_script_path():
+    def append_to_path(path):
+        current_path = os.environ.get('PATH', '')
+        if path not in current_path:
+            current_path += ";" + path
+            os.environ['PATH'] = scripts_dir + ";" + current_path
+
+    user_scripts_dir = site.USER_SITE
+    scripts_dirs = [os.path.join(sys.prefix, 'Scripts'),
+                    user_scripts_dir[:user_scripts_dir.rfind('site-packages')] + 'Scripts']
+    for scripts_dir in scripts_dirs:
+        if os.path.exists(scripts_dir):
+            append_to_path(scripts_dir)
+
+    return scripts_dirs
+
+
+scripts_dirs = get_script_path()
+logging.info(f"script path: {scripts_dirs}")
+
 if __name__ == '__main__':
     try:
         app = QApplication(sys.argv)
