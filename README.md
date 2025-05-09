@@ -28,7 +28,7 @@
   pip install -r .\requirements.txt
   ```
 
-- 打exe包
+- ~~打exe包~~
 
   ```shell
   pip install pyinstaller 
